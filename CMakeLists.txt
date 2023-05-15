@@ -599,6 +599,11 @@ set (GLOG_SRCS
   src/vlog_is_on.cc
 )
 
+# Because Xcode won't build a library without any sources, but glog is built from the binary of glog_base.
+set (GLOG_EMPTY_SRC
+  src/glog/empty.cc
+)
+
 if (HAVE_PTHREAD OR WIN32 OR CYGWIN)
   list (APPEND GLOG_SRCS src/signalhandler.cc)
 endif (HAVE_PTHREAD OR WIN32 OR CYGWIN)
@@ -616,6 +621,7 @@ add_library (glogbase OBJECT
 )
 
 add_library (glog
+  ${GLOG_EMPTY_SRC}
   $<TARGET_OBJECTS:glogbase>
 )
 
