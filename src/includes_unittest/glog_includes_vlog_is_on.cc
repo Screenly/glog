@@ -1,4 +1,4 @@
-// Copyright (c) 2007, Google Inc.
+// Copyright (c) 2024, Google Inc.
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -27,9 +27,8 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
-// Author: Sergey Ioffe
+// Author: Sergiu Deitsch
 
-#define GOOGLE_STRIP_LOG 2
+#include <glog/vlog_is_on.h>
 
-// Include the actual test.
-#include "logging_striptest_main.cc"
+int main() { VLOG_IS_ON(0); }

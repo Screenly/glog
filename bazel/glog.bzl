@@ -25,13 +25,7 @@ expand_template = rule(
     },
 )
 
-def dict_union(x, y):
-    z = {}
-    z.update(x)
-    z.update(y)
-    return z
-
-def glog_library(namespace = "google", with_gflags = 1, **kwargs):
+def glog_library(with_gflags = 1, **kwargs):
     if native.repository_name() != "@":
         repo_name = native.repository_name()[1:]  # Strip the first leading @
         gendir = "$(GENDIR)/external/" + repo_name
@@ -54,12 +48,8 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
 
     common_copts = [
         "-std=c++14",
-        "-DGLOG_BAZEL_BUILD",
-        # Inject a C++ namespace.
-        "-DGOOGLE_NAMESPACE='%s'" % namespace,
-        "-DHAVE_STRING_H",
         "-I%s/glog_internal" % gendir,
-    ] + (["-DHAVE_LIB_GFLAGS"] if with_gflags else [])
+    ] + (["-DGLOG_USE_GFLAGS"] if with_gflags else [])
 
     wasm_copts = [
         # Disable warnings that exists in glog.
@@ -67,27 +57,32 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
         "-Wno-unused-function",
         "-Wno-unused-local-typedefs",
         "-Wno-unused-variable",
-        # Allows src/base/mutex.h to include pthread.h.
-        "-DHAVE_PTHREAD",
         # Allows src/logging.cc to determine the host name.
         "-DHAVE_SYS_UTSNAME_H",
         # For src/utilities.cc.
         "-DHAVE_SYS_TIME_H",
-        "-DHAVE__UNWIND_BACKTRACE",
-        "-DHAVE__UNWIND_GETIP",
+        # NOTE: users could optionally patch -DHAVE_UNWIND off if
+        # stacktrace dumping is not needed
+        "-DHAVE_UNWIND",
         # Enable dumping stacktrace upon sigaction.
         "-DHAVE_SIGACTION",
         # For logging.cc.
         "-DHAVE_PREAD",
-        "-DHAVE___ATTRIBUTE__",
+        # -DHAVE_MODE_T prevent repeated typedef mode_t leading
+        # to emcc compilation failure
+        "-DHAVE_MODE_T",
+        "-DHAVE_UNISTD_H",
     ]
 
     linux_or_darwin_copts = wasm_copts + [
         "-DGLOG_EXPORT=__attribute__((visibility(\\\"default\\\")))",
+        "-DGLOG_NO_EXPORT=__attribute__((visibility(\\\"default\\\")))",
+        "-DHAVE_POSIX_FADVISE",
+        "-DHAVE_SSIZE_T",
+        "-DHAVE_SYS_TYPES_H",
         # For src/utilities.cc.
         "-DHAVE_SYS_SYSCALL_H",
         # For src/logging.cc to create symlinks.
-        "-DHAVE_UNISTD_H",
         "-fvisibility-inlines-hidden",
         "-fvisibility=hidden",
     ]
@@ -95,25 +90,30 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
     freebsd_only_copts = [
         # Enable declaration of _Unwind_Backtrace
         "-D_GNU_SOURCE",
+        "-DHAVE_LINK_H",
+        "-DHAVE_SYMBOLIZE",  # Supported by <link.h>
     ]
 
     linux_only_copts = [
         # For utilities.h.
         "-DHAVE_EXECINFO_H",
+        "-DHAVE_LINK_H",
+        "-DHAVE_SYMBOLIZE",  # Supported by <link.h>
     ]
 
     darwin_only_copts = [
         # For stacktrace.
         "-DHAVE_DLADDR",
-        # Avoid deprecated syscall().
-        "-DHAVE_PTHREAD_THREADID_NP",
     ]
 
     windows_only_copts = [
         # Override -DGLOG_EXPORT= from the cc_library's defines.
         "-DGLOG_EXPORT=__declspec(dllexport)",
         "-DGLOG_NO_ABBREVIATED_SEVERITIES",
-        "-DHAVE_SNPRINTF",
+        "-DGLOG_NO_EXPORT=",
+        "-DGLOG_USE_WINDOWS_PORT",
+        "-DHAVE__CHSIZE_S",
+        "-DHAVE_DBGHELP",
         "-I" + src_windows,
     ]
 
@@ -123,25 +123,26 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
     ]
 
     windows_only_srcs = [
-        "src/glog/log_severity.h",
         "src/windows/dirent.h",
         "src/windows/port.cc",
         "src/windows/port.h",
     ]
 
-    gflags_deps = ["@com_github_gflags_gflags//:gflags"] if with_gflags else []
+    gflags_deps = ["@gflags//:gflags"] if with_gflags else []
 
     final_lib_defines = select({
         # GLOG_EXPORT is normally set by export.h, but that's not
         # generated for Bazel.
         "@bazel_tools//src/conditions:windows": [
-            "GLOG_EXPORT=",
             "GLOG_DEPRECATED=__declspec(deprecated)",
+            "GLOG_EXPORT=",
             "GLOG_NO_ABBREVIATED_SEVERITIES",
+            "GLOG_NO_EXPORT=",
         ],
         "//conditions:default": [
             "GLOG_DEPRECATED=__attribute__((deprecated))",
             "GLOG_EXPORT=__attribute__((visibility(\\\"default\\\")))",
+            "GLOG_NO_EXPORT=__attribute__((visibility(\\\"default\\\")))",
         ],
     })
 
@@ -156,19 +157,30 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
         "//conditions:default": [],
     })
 
+    # Needed to use these headers in `glog` and the test targets without exposing them as public targets in `glog`
+    native.filegroup(
+        name = "shared_headers",
+        srcs = [
+            "src/base/commandlineflags.h",
+            "src/stacktrace.h",
+            "src/utilities.h",
+        ]
+    )
+
     native.cc_library(
         name = "glog",
         visibility = ["//visibility:public"],
         srcs = [
             ":config_h",
-            "src/base/commandlineflags.h",
+            ":shared_headers",
             "src/base/googleinit.h",
-            "src/base/mutex.h",
             "src/demangle.cc",
             "src/demangle.h",
+            "src/flags.cc",
             "src/logging.cc",
             "src/raw_logging.cc",
             "src/signalhandler.cc",
+            "src/stacktrace.cc",
             "src/stacktrace.h",
             "src/stacktrace_generic-inl.h",
             "src/stacktrace_libunwind-inl.h",
@@ -186,18 +198,32 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
             "//conditions:default": [],
         }),
         hdrs = [
+            "src/glog/flags.h",
             "src/glog/log_severity.h",
+            "src/glog/logging.h",
             "src/glog/platform.h",
-            ":logging_h",
-            ":raw_logging_h",
-            ":stl_logging_h",
-            ":vlog_is_on_h",
+            "src/glog/raw_logging.h",
+            "src/glog/stl_logging.h",
+            "src/glog/types.h",
+            "src/glog/vlog_is_on.h",
         ],
+        # https://github.com/google/glog/issues/837: Replacing
+        # `strip_include_prefix` with `includes` would avoid spamming
+        # downstream projects with compiler warnings, but would also leak
+        # private headers like stacktrace.h, because strip_include_prefix's
+        # implementation only creates symlinks for the public hdrs. I suspect
+        # the only way to avoid this is to refactor the project including the
+        # CMake build, so that the private headers are in a glog_internal
+        # subdirectory.
         strip_include_prefix = "src",
         defines = final_lib_defines,
         copts = final_lib_copts,
         deps = gflags_deps + select({
             "@bazel_tools//src/conditions:windows": [":strip_include_prefix_hack"],
+            "//conditions:default": [],
+        }),
+        linkopts = select({
+            "@bazel_tools//src/conditions:windows": ["dbghelp.lib"],
             "//conditions:default": [],
         }),
         **kwargs
@@ -226,14 +252,16 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
             name = test_name + "_test",
             visibility = ["//visibility:public"],
             srcs = [
+                ":config_h",
+                ":shared_headers",
                 "src/googletest.h",
                 "src/" + test_name + "_unittest.cc",
             ],
             defines = final_lib_defines,
             copts = final_lib_copts + test_only_copts,
-            deps = [
+            deps = gflags_deps + [
                 ":glog",
-                "@com_github_google_googletest//:gtest",
+                "@googletest//:gtest",
             ],
             **kwargs
         )
@@ -243,11 +271,14 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
     native.cc_library(
         name = "strip_include_prefix_hack",
         hdrs = [
+            "src/glog/flags.h",
             "src/glog/log_severity.h",
-            ":logging_h",
-            ":raw_logging_h",
-            ":stl_logging_h",
-            ":vlog_is_on_h",
+            "src/glog/logging.h",
+            "src/glog/platform.h",
+            "src/glog/raw_logging.h",
+            "src/glog/stl_logging.h",
+            "src/glog/types.h",
+            "src/glog/vlog_is_on.h",
         ],
     )
 
@@ -257,51 +288,3 @@ def glog_library(namespace = "google", with_gflags = 1, **kwargs):
         out = "glog_internal/config.h",
         substitutions = {"#cmakedefine": "//cmakedefine"},
     )
-
-    common_config = {
-        "@ac_cv_have_u_int16_t@": "0",
-        "@ac_cv_have_glog_export@": "0",
-        "@ac_google_start_namespace@": "namespace google {",
-        "@ac_google_end_namespace@": "}",
-        "@ac_google_namespace@": "google",
-    }
-
-    posix_config = dict_union(common_config, {
-        "@ac_cv___attribute___noinline@": "__attribute__((noinline))",
-        "@ac_cv___attribute___printf_4_5@": "__attribute__((__format__(__printf__, 4, 5)))",
-        "@ac_cv_have___builtin_expect@": "1",
-        "@ac_cv_have_libgflags@": "1" if with_gflags else "0",
-        "@ac_cv_have_mode_t@": "1",
-        "@ac_cv_have_ssize_t@": "1",
-        "@ac_cv_have_systypes_h@": "1",
-        "@ac_cv_have_unistd_h@": "1",
-    })
-
-    windows_config = dict_union(common_config, {
-        "@ac_cv___attribute___noinline@": "",
-        "@ac_cv___attribute___printf_4_5@": "",
-        "@ac_cv_have___builtin_expect@": "0",
-        "@ac_cv_have_libgflags@": "0",
-        "@ac_cv_have_mode_t@": "0",
-        "@ac_cv_have_ssize_t@": "0",
-        "@ac_cv_have_systypes_h@": "0",
-        "@ac_cv_have_unistd_h@": "0",
-    })
-
-    [
-        expand_template(
-            name = "%s_h" % f,
-            template = "src/glog/%s.h.in" % f,
-            out = "src/glog/%s.h" % f,
-            substitutions = select({
-                "@bazel_tools//src/conditions:windows": windows_config,
-                "//conditions:default": posix_config,
-            }),
-        )
-        for f in [
-            "vlog_is_on",
-            "stl_logging",
-            "raw_logging",
-            "logging",
-        ]
-    ]
